@@ -4,6 +4,7 @@ import { DeepgramService } from '../../providers/deepgram/deepgram.service';
 import { R2Service } from '../../providers/r2/r2.service';
 import { YouTubeDownloaderService } from '../../providers/youtube/youtube-downloader.service';
 import { TranscriptsService } from '../transcripts/transcripts.service';
+import { AuthService } from '../auth/auth.service';
 import { TaskStatus, SourceType } from '../../database/entities';
 
 export interface TaskJobData {
@@ -25,6 +26,7 @@ export class TaskProcessorService {
     private r2Service: R2Service,
     private youtubeDownloader: YouTubeDownloaderService,
     private transcriptsService: TranscriptsService,
+    private authService: AuthService,
   ) {}
 
   /**
@@ -95,6 +97,9 @@ export class TaskProcessorService {
         cost_minutes: costMinutes,
       });
 
+      // 记录体验使用（如果是体验任务）
+      await this.recordTrialUsageIfNeeded(task_id);
+
       this.logger.log(`Task ${task_id} completed successfully`);
     } catch (error) {
       this.logger.error(`Task ${task_id} failed: ${error}`);
@@ -126,6 +131,31 @@ export class TaskProcessorService {
 
     if (error) {
       this.logger.error(`Failed to update task status: ${error.message}`);
+    }
+  }
+
+  /**
+   * 如果是体验任务，记录体验使用
+   */
+  private async recordTrialUsageIfNeeded(taskId: string): Promise<void> {
+    const supabase = this.supabaseService.getClient();
+
+    // 查询任务获取 user_id, anon_id, is_trial
+    const { data: task, error } = await supabase
+      .from('tasks')
+      .select('user_id, anon_id, is_trial')
+      .eq('id', taskId)
+      .single();
+
+    if (error || !task) {
+      this.logger.warn(`Failed to get task info for trial recording: ${error?.message}`);
+      return;
+    }
+
+    // 如果是体验任务，记录使用
+    if (task.is_trial) {
+      this.logger.log(`Recording trial usage for task ${taskId}`);
+      await this.authService.recordTrialUsage(task.user_id, task.anon_id);
     }
   }
 
