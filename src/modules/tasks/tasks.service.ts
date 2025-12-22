@@ -5,6 +5,8 @@ import {
   ForbiddenException,
   NotFoundException,
   ConflictException,
+  Optional,
+  Inject,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -14,6 +16,7 @@ import { SupabaseService } from '../../providers/supabase/supabase.service';
 import { YouTubeService } from '../../providers/youtube/youtube.service';
 import { AuthService } from '../auth/auth.service';
 import { BillingService } from '../billing/billing.service';
+import { TaskProcessorService } from './task-processor.service';
 import { CurrentUser } from '../../common/interfaces/response.interface';
 import {
   Task,
@@ -32,17 +35,26 @@ export class TasksService {
   private readonly logger = new Logger(TasksService.name);
   private readonly maxTrialMinutes: number;
   private readonly pollInterval: number;
+  private readonly redisEnabled: boolean;
 
   constructor(
-    @InjectQueue(TASKS_QUEUE) private tasksQueue: Queue,
+    @Optional() @Inject(TASKS_QUEUE) private tasksQueue: Queue | null,
     private supabaseService: SupabaseService,
     private youtubeService: YouTubeService,
     private authService: AuthService,
     private billingService: BillingService,
+    private taskProcessorService: TaskProcessorService,
     private configService: ConfigService,
   ) {
     this.maxTrialMinutes = this.configService.get<number>('trial.maxDurationMinutes') || 30;
     this.pollInterval = this.configService.get<number>('task.pollIntervalSeconds') || 5;
+    this.redisEnabled = this.configService.get<boolean>('redis.enabled') || false;
+
+    if (this.redisEnabled) {
+      this.logger.log('Redis enabled - using queue mode for task processing');
+    } else {
+      this.logger.log('Redis disabled - using sync mode for task processing');
+    }
   }
 
   /**
@@ -152,28 +164,43 @@ export class TasksService {
       throw new Error('创建任务失败');
     }
 
-    // 5. 入队
-    await this.tasksQueue.add(
-      'transcribe',
-      {
-        task_id: taskId,
-        task_type: task.task_type,
-        source_type: task.source_type,
-        source_url: task.source_url,
-        engine: task.engine,
-        params: task.params,
-      },
-      {
-        priority: priority === Priority.PAID ? 1 : 10,
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 5000,
-        },
-      },
-    );
+    const jobData = {
+      task_id: taskId,
+      task_type: task.task_type!,
+      source_type: task.source_type!,
+      source_url: task.source_url!,
+      engine: task.engine!,
+      params: task.params,
+    };
 
-    this.logger.log(`Task created and queued: ${taskId}`);
+    // 5. 根据模式处理任务
+    if (this.redisEnabled && this.tasksQueue) {
+      // 队列模式：入队异步处理
+      await this.tasksQueue.add(
+        'transcribe',
+        jobData,
+        {
+          priority: priority === Priority.PAID ? 1 : 10,
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 5000,
+          },
+        },
+      );
+      this.logger.log(`Task created and queued: ${taskId}`);
+    } else {
+      // 同步模式：直接处理（不阻塞响应）
+      this.logger.log(`Task created, processing synchronously: ${taskId}`);
+      // 使用 setImmediate 避免阻塞响应
+      setImmediate(async () => {
+        try {
+          await this.taskProcessorService.processTask(jobData);
+        } catch (err) {
+          this.logger.error(`Sync task processing failed: ${err}`);
+        }
+      });
+    }
 
     return {
       task_id: taskId,

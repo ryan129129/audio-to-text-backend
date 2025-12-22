@@ -20,8 +20,13 @@ FROM node:20-alpine AS production
 
 WORKDIR /app
 
-# Install dumb-init for proper signal handling
-RUN apk add --no-cache dumb-init
+# Install system dependencies
+# - dumb-init: proper signal handling
+# - ffmpeg: audio processing for yt-dlp
+# - python3: required by yt-dlp
+# - yt-dlp: YouTube downloader
+RUN apk add --no-cache dumb-init ffmpeg python3 py3-pip && \
+    pip3 install --break-system-packages yt-dlp
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
@@ -36,8 +41,8 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Change ownership to non-root user
-RUN chown -R nestjs:nodejs /app
+# Create tmp directory for YouTube downloads
+RUN mkdir -p /app/tmp/youtube && chown -R nestjs:nodejs /app
 
 USER nestjs
 

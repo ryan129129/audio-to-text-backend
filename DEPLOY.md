@@ -13,33 +13,96 @@
    gcloud config set project YOUR_PROJECT_ID
    ```
 
-## 环境变量配置
+## 两种运行模式
 
-在 Cloud Run 控制台或使用 gcloud 命令配置以下环境变量：
+### 模式一：同步模式（默认，无需 Redis）
+
+适合初期测试和小规模使用。转录任务在 API 服务中直接处理。
+
+**优点：**
+- 部署简单，无需额外服务
+- 成本低
+
+**缺点：**
+- 长时间任务可能超时
+- 无法并发处理多个任务
+
+### 模式二：队列模式（需要 Redis + Worker）
+
+适合生产环境和大规模使用。任务通过 Redis 队列异步处理。
+
+**优点：**
+- 支持长时间任务
+- 可扩展，支持多 Worker
+- 任务重试机制
+
+**缺点：**
+- 需要配置 Redis
+- 需要部署额外的 Worker 服务
+
+---
+
+## 快速开始：同步模式部署
+
+### 1. 配置环境变量
+
+在 Cloud Run 控制台或使用 gcloud 配置以下环境变量：
 
 | 变量名 | 说明 |
 |--------|------|
 | `NODE_ENV` | 设置为 `production` |
+| `REDIS_ENABLED` | 设置为 `false`（同步模式） |
 | `SUPABASE_URL` | Supabase 项目 URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase Service Role Key |
 | `R2_BUCKET` | Cloudflare R2 存储桶名称 |
 | `R2_ACCESS_KEY` | R2 访问密钥 |
 | `R2_SECRET_KEY` | R2 密钥 |
 | `R2_ENDPOINT` | R2 端点 URL |
-| `REDIS_URL` | Redis 连接 URL |
 | `DEEPGRAM_API_KEY` | Deepgram API 密钥 |
-| `STRIPE_SECRET_KEY` | Stripe 密钥 |
-| `STRIPE_WEBHOOK_SECRET` | Stripe Webhook 密钥 |
 
-## 部署方式
+### 2. 部署
 
-### 方式一：手动部署
+```bash
+gcloud builds submit --config cloudbuild.yaml
+```
+
+这会部署一个单独的 API 服务，不需要 Redis。
+
+---
+
+## 升级到队列模式
+
+当任务量增加，需要升级到队列模式时：
+
+### 1. 创建 Upstash Redis
+
+1. 访问 https://console.upstash.com/
+2. 点击 **Create Database**
+3. 选择区域：`Asia Pacific (Tokyo)` 或 `Asia Pacific (Singapore)`
+4. 创建后，复制 **Redis URL**
+
+### 2. 使用队列模式配置部署
+
+```bash
+gcloud builds submit --config cloudbuild-with-worker.yaml \
+  --substitutions=_REDIS_URL="rediss://default:xxx@xxx.upstash.io:6379"
+```
+
+这会同时部署：
+- **audio-to-text-backend**：API 服务
+- **audio-to-text-worker**：Worker 服务
+
+---
+
+## 手动部署
+
+### 同步模式（无 Redis）
 
 ```bash
 # 1. 构建 Docker 镜像
 docker build -t gcr.io/YOUR_PROJECT_ID/audio-to-text-backend:latest .
 
-# 2. 推送镜像到 Container Registry
+# 2. 推送镜像
 docker push gcr.io/YOUR_PROJECT_ID/audio-to-text-backend:latest
 
 # 3. 部署到 Cloud Run
@@ -48,27 +111,65 @@ gcloud run deploy audio-to-text-backend \
   --platform managed \
   --region asia-east1 \
   --allow-unauthenticated \
-  --memory 512Mi \
+  --memory 1Gi \
   --cpu 1 \
-  --min-instances 0 \
-  --max-instances 10 \
-  --set-env-vars "NODE_ENV=production,SUPABASE_URL=xxx,..."
+  --set-env-vars "NODE_ENV=production,REDIS_ENABLED=false,SUPABASE_URL=xxx,..."
 ```
 
-### 方式二：使用 Cloud Build (推荐)
+### 队列模式（需要 Redis）
 
 ```bash
-# 提交构建
-gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_REGION=asia-east1
+# 部署 API 服务
+gcloud run deploy audio-to-text-backend \
+  --image gcr.io/YOUR_PROJECT_ID/audio-to-text-backend:latest \
+  --platform managed \
+  --region asia-east1 \
+  --allow-unauthenticated \
+  --memory 512Mi \
+  --set-env-vars "NODE_ENV=production,REDIS_ENABLED=true,REDIS_URL=xxx,..."
+
+# 部署 Worker 服务
+gcloud run deploy audio-to-text-worker \
+  --image gcr.io/YOUR_PROJECT_ID/audio-to-text-backend:latest \
+  --platform managed \
+  --region asia-east1 \
+  --no-allow-unauthenticated \
+  --memory 1Gi \
+  --cpu 2 \
+  --min-instances 1 \
+  --command "node" \
+  --args "dist/worker.js" \
+  --set-env-vars "NODE_ENV=production,REDIS_ENABLED=true,REDIS_URL=xxx,..."
 ```
 
-### 方式三：设置 CI/CD 自动部署
+---
 
-1. 进入 Cloud Build 控制台
-2. 创建触发器 → 连接 GitHub 仓库
-3. 选择 `cloudbuild.yaml` 作为构建配置
-4. 设置触发条件（如：推送到 main 分支）
+## 服务架构
+
+### 同步模式
+```
+┌─────────────────┐
+│   Cloud Run     │
+│   API 服务      │──────▶ Deepgram
+│ (同步处理任务)  │
+└─────────────────┘
+```
+
+### 队列模式
+```
+┌─────────────────┐     ┌─────────────────┐
+│   Cloud Run     │     │   Cloud Run     │
+│   API 服务      │────▶│   Worker 服务   │──────▶ Deepgram
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         ▼                       ▼
+    ┌─────────────────────────────────┐
+    │          Upstash Redis          │
+    │         (任务队列)              │
+    └─────────────────────────────────┘
+```
+
+---
 
 ## 配置 Secrets（推荐）
 
@@ -76,54 +177,19 @@ gcloud builds submit --config cloudbuild.yaml \
 
 ```bash
 # 创建 secrets
-gcloud secrets create SUPABASE_SERVICE_ROLE_KEY --data-file=-
-gcloud secrets create DEEPGRAM_API_KEY --data-file=-
-gcloud secrets create STRIPE_SECRET_KEY --data-file=-
+echo -n "your-api-key" | gcloud secrets create DEEPGRAM_API_KEY --data-file=-
 
 # 授予 Cloud Run 访问权限
-gcloud secrets add-iam-policy-binding SUPABASE_SERVICE_ROLE_KEY \
+gcloud secrets add-iam-policy-binding DEEPGRAM_API_KEY \
   --member="serviceAccount:YOUR_SERVICE_ACCOUNT" \
   --role="roles/secretmanager.secretAccessor"
 
 # 在 Cloud Run 中使用 secrets
 gcloud run deploy audio-to-text-backend \
-  --image gcr.io/YOUR_PROJECT_ID/audio-to-text-backend:latest \
-  --set-secrets="SUPABASE_SERVICE_ROLE_KEY=SUPABASE_SERVICE_ROLE_KEY:latest"
+  --set-secrets="DEEPGRAM_API_KEY=DEEPGRAM_API_KEY:latest"
 ```
 
-## Redis 配置
-
-Cloud Run 需要外部 Redis 服务。推荐选项：
-
-1. **Upstash Redis** (推荐，有免费额度，Serverless)
-   - https://upstash.com/
-   - 支持 REST API，适合 Serverless 环境
-
-2. **Redis Cloud**
-   - https://redis.com/cloud/
-
-3. **Google Cloud Memorystore**
-   - 需要 VPC 连接器
-
-## Worker 部署
-
-Worker 进程需要单独部署。创建另一个 Cloud Run 服务：
-
-```bash
-# 修改启动命令为 worker
-gcloud run deploy audio-to-text-worker \
-  --image gcr.io/YOUR_PROJECT_ID/audio-to-text-backend:latest \
-  --platform managed \
-  --region asia-east1 \
-  --memory 1Gi \
-  --cpu 2 \
-  --min-instances 1 \
-  --max-instances 5 \
-  --command "node" \
-  --args "dist/worker.js" \
-  --no-allow-unauthenticated \
-  --set-env-vars "NODE_ENV=production,..."
-```
+---
 
 ## 验证部署
 
@@ -131,9 +197,11 @@ gcloud run deploy audio-to-text-worker \
 # 获取服务 URL
 gcloud run services describe audio-to-text-backend --region=asia-east1 --format='value(status.url)'
 
-# 测试健康检查
-curl https://YOUR_SERVICE_URL/api/health
+# 测试 API
+curl https://YOUR_SERVICE_URL/api
 ```
+
+---
 
 ## 监控与日志
 
@@ -145,12 +213,15 @@ gcloud run logs read --service=audio-to-text-backend --region=asia-east1
 gcloud run logs tail --service=audio-to-text-backend --region=asia-east1
 ```
 
+---
+
 ## 成本优化建议
 
-1. 设置 `min-instances=0` 以在无请求时缩容到零
-2. 使用 CPU Throttling（默认开启）
-3. 合理设置内存和 CPU 限制
-4. 使用 Container Registry 的生命周期策略清理旧镜像
+1. **同步模式**：设置 `min-instances=0`，无请求时自动缩容到零
+2. **队列模式**：Worker 设置 `min-instances=1` 保持响应性
+3. 使用 Container Registry 生命周期策略清理旧镜像
+
+---
 
 ## 故障排查
 
@@ -159,10 +230,10 @@ gcloud run logs tail --service=audio-to-text-backend --region=asia-east1
 gcloud run logs read --service=audio-to-text-backend --region=asia-east1 --limit=50
 ```
 
-### 内存不足
-增加内存限制：`--memory 1Gi`
+### 任务处理超时
+- 同步模式下，增加 `--timeout` 值（最大 3600s）
+- 或升级到队列模式
 
-### 冷启动慢
-- 设置 `min-instances=1`
-- 优化 Docker 镜像大小
-- 减少启动时的依赖初始化
+### Redis 连接失败
+- 检查 `REDIS_URL` 格式是否正确
+- 确保使用 `rediss://`（带 SSL）而不是 `redis://`

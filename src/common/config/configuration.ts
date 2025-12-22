@@ -17,6 +17,7 @@ export default () => ({
   },
 
   redis: {
+    enabled: process.env.REDIS_ENABLED === 'true',
     url: process.env.REDIS_URL || 'redis://localhost:6379',
   },
 

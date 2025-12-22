@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, DynamicModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -22,46 +22,57 @@ import { TranscriptsModule } from './modules/transcripts/transcripts.module';
 // Guards
 import { AuthGuard } from './common/guards/auth.guard';
 
-@Module({
-  imports: [
-    // Config
-    ConfigModule.forRoot({
-      isGlobal: true,
-      load: [configuration],
-      envFilePath: ['.env.local', '.env'],
-    }),
-
-    // BullMQ
-    BullModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        connection: {
-          url: configService.get<string>('redis.url'),
-        },
+@Module({})
+export class AppModule {
+  static forRoot(): DynamicModule {
+    const imports: any[] = [
+      // Config
+      ConfigModule.forRoot({
+        isGlobal: true,
+        load: [configuration],
+        envFilePath: ['.env.local', '.env'],
       }),
-      inject: [ConfigService],
-    }),
 
-    // Providers
-    SupabaseModule,
-    R2Module,
-    DeepgramModule,
-    YouTubeModule,
-    StripeModule,
+      // Providers
+      SupabaseModule,
+      R2Module,
+      DeepgramModule,
+      YouTubeModule,
+      StripeModule,
 
-    // Business Modules
-    AuthModule,
-    UploadModule,
-    TasksModule,
-    BillingModule,
-    WebhooksModule,
-    TranscriptsModule,
-  ],
-  providers: [
-    {
-      provide: APP_GUARD,
-      useClass: AuthGuard,
-    },
-  ],
-})
-export class AppModule {}
+      // Business Modules
+      AuthModule,
+      UploadModule,
+      TasksModule,
+      BillingModule,
+      WebhooksModule,
+      TranscriptsModule,
+    ];
+
+    // 只有当 REDIS_ENABLED=true 时才加载 BullMQ
+    if (process.env.REDIS_ENABLED === 'true') {
+      imports.push(
+        BullModule.forRootAsync({
+          imports: [ConfigModule],
+          useFactory: (configService: ConfigService) => ({
+            connection: {
+              url: configService.get<string>('redis.url'),
+            },
+          }),
+          inject: [ConfigService],
+        }),
+      );
+    }
+
+    return {
+      module: AppModule,
+      imports,
+      providers: [
+        {
+          provide: APP_GUARD,
+          useClass: AuthGuard,
+        },
+      ],
+    };
+  }
+}
