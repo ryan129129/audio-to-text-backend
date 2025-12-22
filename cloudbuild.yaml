@@ -88,7 +88,7 @@ images:
 
 # Substitutions with defaults
 substitutions:
-  _REGION: 'asia-east1'
+  _REGION: 'us-west1'      # 美国西部
   _DEPLOY_WORKER: 'false'  # 默认不部署 Worker（同步模式）
   _REDIS_URL: ''           # 队列模式需要提供
 
