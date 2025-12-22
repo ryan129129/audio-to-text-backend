@@ -95,18 +95,33 @@ export class AuthService {
     const supabase = this.supabaseService.getClient();
 
     // 创建体验使用记录
-    await supabase.from('trial_usages').insert({
+    const { error: insertError } = await supabase.from('trial_usages').insert({
       anon_id: anonId,
       user_id: userId,
       used_at: new Date().toISOString(),
     });
 
-    // 更新 anon_tokens 的 used_trial 标记
+    if (insertError) {
+      this.logger.error(`Failed to insert trial_usages: ${insertError.message}`);
+    }
+
+    // 更新 anon_tokens 的 used_trial 标记（使用 upsert 确保记录存在）
     if (anonId) {
-      await supabase
+      const { error: upsertError } = await supabase
         .from('anon_tokens')
-        .update({ used_trial: true })
-        .eq('anon_id', anonId);
+        .upsert(
+          {
+            anon_id: anonId,
+            used_trial: true,
+            ip_hash: '',
+            ua_hash: '',
+          },
+          { onConflict: 'anon_id' }
+        );
+
+      if (upsertError) {
+        this.logger.error(`Failed to upsert anon_tokens: ${upsertError.message}`);
+      }
     }
   }
 
