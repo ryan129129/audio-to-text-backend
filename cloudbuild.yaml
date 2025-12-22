@@ -20,7 +20,7 @@ steps:
       - 'push'
       - 'gcr.io/$PROJECT_ID/audio-to-text-backend:latest'
 
-  # Deploy container image to Cloud Run
+  # Deploy API service to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -46,6 +46,37 @@ steps:
       - '80'
       - '--timeout'
       - '300s'
+      - '--set-env-vars'
+      - 'NODE_ENV=production'
+
+  # Deploy Worker service to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'audio-to-text-worker'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/audio-to-text-backend:$COMMIT_SHA'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--memory'
+      - '1Gi'
+      - '--cpu'
+      - '2'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '5'
+      - '--timeout'
+      - '3600s'
+      - '--command'
+      - 'node'
+      - '--args'
+      - 'dist/worker.js'
       - '--set-env-vars'
       - 'NODE_ENV=production'
 
