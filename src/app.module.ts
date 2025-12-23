@@ -1,6 +1,7 @@
 import { Module, DynamicModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import configuration from './common/config/configuration';
 
@@ -32,6 +33,9 @@ export class AppModule {
         load: [configuration],
         envFilePath: ['.env.local', '.env'],
       }),
+
+      // Schedule (定时任务)
+      ScheduleModule.forRoot(),
 
       // Providers
       SupabaseModule,

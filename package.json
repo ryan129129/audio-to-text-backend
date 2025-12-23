@@ -35,6 +35,7 @@
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.9",
     "@nestjs/platform-fastify": "^11.1.9",
+    "@nestjs/schedule": "^6.1.0",
     "@supabase/supabase-js": "^2.89.0",
     "bullmq": "^5.66.1",
     "class-transformer": "^0.5.1",

@@ -4,6 +4,7 @@ import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
 import { TasksProcessor } from './tasks.processor';
 import { TaskProcessorService } from './task-processor.service';
+import { TaskCleanupService } from './task-cleanup.service';
 import { AuthModule } from '../auth/auth.module';
 import { BillingModule } from '../billing/billing.module';
 import { TranscriptsModule } from '../transcripts/transcripts.module';
@@ -25,7 +26,12 @@ const redisEnabled = process.env.REDIS_ENABLED === 'true';
     TranscriptsModule,
   ],
   controllers: [TasksController],
-  providers: [TasksService, TaskProcessorService, ...(redisEnabled ? [TasksProcessor] : [])],
+  providers: [
+    TasksService,
+    TaskProcessorService,
+    TaskCleanupService,
+    ...(redisEnabled ? [TasksProcessor] : []),
+  ],
   exports: [TasksService, TaskProcessorService],
 })
 export class TasksModule {}
