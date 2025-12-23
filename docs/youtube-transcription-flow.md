@@ -80,13 +80,18 @@ if (transcript) {
 **关键参数**：
 ```bash
 yt-dlp \
+  -f bestaudio/best \              # 选择最佳音频格式
   --extract-audio \
   --audio-format m4a \
   --audio-quality 0 \
-  --cookies /app/cookies/youtube.txt \  # Cookies 认证
-  --extractor-args youtube:player_client=android,web \
+  --cookies /tmp/youtube/cookies-xxx.txt \  # 临时 Cookies 文件
   <youtube_url>
 ```
+
+**注意**：
+- 使用 `-f bestaudio/best` 确保格式兼容性
+- Cookies 文件从 `/app/cookies/youtube.txt` 复制到 `/tmp/youtube/` 临时目录
+- 复制后设置 `chmod 666` 权限，因为 yt-dlp 需要写入 cookies
 
 #### 2.2 上传到 R2
 
@@ -172,10 +177,29 @@ YouTube cookies 通常在几个月后过期。需要定期更新：
    - 原因：视频没有字幕
    - 处理：自动回退到 Deepgram 转录
 
-3. **yt-dlp 下载失败**
+3. **"No video formats found"**
+   - 原因：yt-dlp 版本过旧或 cookies 无效
+   - 解决：更新 yt-dlp 到最新版本，检查 cookies 是否过期
+
+4. **"Requested format is not available"**
+   - 原因：指定的音频格式不可用
+   - 解决：使用 `-f bestaudio/best` 自动选择最佳可用格式
+
+5. **"PermissionError: Permission denied" (cookies 文件)**
+   - 原因：Secret Manager 挂载的文件是只读的，yt-dlp 需要写入权限
+   - 解决：复制 cookies 到 `/tmp` 目录并设置可写权限
+
+6. **yt-dlp 下载失败**
    - 原因：Cookies 过期或视频受限
    - 解决：更新 Cookies 或检查视频权限
 
 ## 更新日志
 
-- **2025-12-23**：实现 YouTube 字幕优先提取，添加 Cookies 支持
+- **2025-12-23**：
+  - 实现 YouTube 字幕优先提取功能
+  - 添加 Cookies 支持（通过 Secret Manager 挂载）
+  - 修复 cookies 权限问题（复制到 /tmp 并设置可写权限）
+  - 修复临时目录路径（使用 /tmp/youtube 而非 /app/tmp/youtube）
+  - 使用 `-f bestaudio/best` 提高格式兼容性
+  - Dockerfile 更新 yt-dlp 到最新版本（--upgrade）
+  - 测试验证：有字幕视频（Rick Astley）和无字幕视频（Me at the zoo）均成功
