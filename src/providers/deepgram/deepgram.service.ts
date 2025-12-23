@@ -125,7 +125,11 @@ export class DeepgramService implements OnModuleInit {
     }
 
     const result = await response.json();
-    return result.results as DeepgramResult;
+    // duration 在 metadata 中，channels 在 results 中
+    return {
+      duration: result.metadata?.duration || 0,
+      channels: result.results?.channels || [],
+    } as DeepgramResult;
   }
 
   /**
