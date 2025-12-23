@@ -22,6 +22,7 @@ export interface TaskResponseDto {
   task_id: string;
   status: string;
   source_type: string;
+  source_url: string;
   priority: string;
   engine: string;
   duration_sec: number | null;

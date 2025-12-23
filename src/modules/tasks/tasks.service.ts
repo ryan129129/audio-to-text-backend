@@ -339,6 +339,7 @@ export class TasksService {
       task_id: task.id,
       status: task.status,
       source_type: task.source_type,
+      source_url: task.source_url,
       priority: task.priority,
       engine: task.engine,
       duration_sec: task.duration_sec,
