@@ -16,6 +16,7 @@ export interface DownloadResult {
 export class YouTubeDownloaderService {
   private readonly logger = new Logger(YouTubeDownloaderService.name);
   private readonly tempDir: string;
+  private readonly cookiesPath = '/app/cookies/youtube.txt';
 
   constructor(
     private configService: ConfigService,
@@ -77,8 +78,15 @@ export class YouTubeDownloaderService {
         '--no-warnings',
         '--extractor-args', 'youtube:player_client=android,web',
         '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        url,
       ];
+
+      // 如果存在 cookies 文件，则使用 cookies 进行身份验证
+      if (existsSync(this.cookiesPath)) {
+        this.logger.log(`Using cookies file: ${this.cookiesPath}`);
+        args.push('--cookies', this.cookiesPath);
+      }
+
+      args.push(url);
 
       const proc = spawn('yt-dlp', args);
 
