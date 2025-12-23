@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { spawn } from 'child_process';
-import { createReadStream, unlinkSync, existsSync, mkdirSync } from 'fs';
+import { unlinkSync, existsSync, mkdirSync, copyFileSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { R2Service } from '../r2/r2.service';
@@ -80,10 +80,17 @@ export class YouTubeDownloaderService {
         '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       ];
 
-      // 如果存在 cookies 文件，则使用 cookies 进行身份验证
+      // 如果存在 cookies 文件，复制到临时目录（因为 yt-dlp 需要写入权限）
+      let tempCookiesPath: string | null = null;
       if (existsSync(this.cookiesPath)) {
-        this.logger.log(`Using cookies file: ${this.cookiesPath}`);
-        args.push('--cookies', this.cookiesPath);
+        tempCookiesPath = join(this.tempDir, `cookies-${uuidv4()}.txt`);
+        try {
+          copyFileSync(this.cookiesPath, tempCookiesPath);
+          this.logger.log(`Using cookies file (copied to temp): ${tempCookiesPath}`);
+          args.push('--cookies', tempCookiesPath);
+        } catch (err) {
+          this.logger.warn(`Failed to copy cookies file: ${err}`);
+        }
       }
 
       args.push(url);
@@ -97,6 +104,15 @@ export class YouTubeDownloaderService {
       });
 
       proc.on('close', (code) => {
+        // 清理临时 cookies 文件
+        if (tempCookiesPath && existsSync(tempCookiesPath)) {
+          try {
+            unlinkSync(tempCookiesPath);
+          } catch (e) {
+            this.logger.warn(`Failed to cleanup temp cookies: ${e}`);
+          }
+        }
+
         if (code === 0) {
           resolve();
         } else {
