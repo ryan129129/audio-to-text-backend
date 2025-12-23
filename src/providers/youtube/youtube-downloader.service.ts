@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { spawn } from 'child_process';
-import { unlinkSync, existsSync, mkdirSync, copyFileSync } from 'fs';
+import { unlinkSync, existsSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { R2Service } from '../r2/r2.service';
@@ -86,6 +86,7 @@ export class YouTubeDownloaderService {
         tempCookiesPath = join(this.tempDir, `cookies-${uuidv4()}.txt`);
         try {
           copyFileSync(this.cookiesPath, tempCookiesPath);
+          chmodSync(tempCookiesPath, 0o666);  // 确保可写
           this.logger.log(`Using cookies file (copied to temp): ${tempCookiesPath}`);
           args.push('--cookies', tempCookiesPath);
         } catch (err) {
