@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SupabaseService } from '../../providers/supabase/supabase.service';
 import { DeepgramService } from '../../providers/deepgram/deepgram.service';
-import { R2Service } from '../../providers/r2/r2.service';
 import { YouTubeDownloaderService } from '../../providers/youtube/youtube-downloader.service';
 import { YouTubeTranscriptService } from '../../providers/youtube/youtube-transcript.service';
 import { TranscriptsService } from '../transcripts/transcripts.service';
@@ -24,7 +23,6 @@ export class TaskProcessorService {
   constructor(
     private supabaseService: SupabaseService,
     private deepgramService: DeepgramService,
-    private r2Service: R2Service,
     private youtubeDownloader: YouTubeDownloaderService,
     private youtubeTranscript: YouTubeTranscriptService,
     private transcriptsService: TranscriptsService,
@@ -89,36 +87,11 @@ export class TaskProcessorService {
 
       const { segments, duration } = transcript;
 
-      // 生成 SRT/VTT 文件并上传到 R2
-      const srtContent = this.generateSRT(segments);
-      const vttContent = this.generateVTT(segments);
-
-      let srtUrl = '';
-      let vttUrl = '';
-      let rawUrl = '';
-
-      try {
-        const srtKey = `transcripts/${taskId}/output.srt`;
-        const vttKey = `transcripts/${taskId}/output.vtt`;
-        const rawKey = `transcripts/${taskId}/raw.json`;
-
-        [srtUrl, vttUrl, rawUrl] = await Promise.all([
-          this.r2Service.uploadFile(srtKey, srtContent, 'text/plain'),
-          this.r2Service.uploadFile(vttKey, vttContent, 'text/plain'),
-          this.r2Service.uploadFile(rawKey, JSON.stringify(transcript), 'application/json'),
-        ]);
-      } catch (r2Error) {
-        this.logger.warn(`R2 upload failed, skipping: ${r2Error}`);
-      }
-
-      // 保存转录结果
+      // 保存转录结果（TranscriptsService 会统一生成 SRT/VTT 并上传到 R2）
       await this.transcriptsService.saveTranscript({
         task_id: taskId,
         segments,
         raw_response: transcript,
-        raw_url: rawUrl,
-        srt_url: srtUrl,
-        vtt_url: vttUrl,
       });
 
       // 更新任务状态（YouTube 字幕免费，cost_minutes 为 0）
@@ -162,36 +135,11 @@ export class TaskProcessorService {
     const duration = result.duration;
     const segments = this.extractSegments(result);
 
-    // 生成 SRT/VTT 文件并上传到 R2
-    const srtContent = this.generateSRT(segments);
-    const vttContent = this.generateVTT(segments);
-
-    let srtUrl = '';
-    let vttUrl = '';
-    let rawUrl = '';
-
-    try {
-      const srtKey = `transcripts/${taskId}/output.srt`;
-      const vttKey = `transcripts/${taskId}/output.vtt`;
-      const rawKey = `transcripts/${taskId}/raw.json`;
-
-      [srtUrl, vttUrl, rawUrl] = await Promise.all([
-        this.r2Service.uploadFile(srtKey, srtContent, 'text/plain'),
-        this.r2Service.uploadFile(vttKey, vttContent, 'text/plain'),
-        this.r2Service.uploadFile(rawKey, JSON.stringify(result), 'application/json'),
-      ]);
-    } catch (r2Error) {
-      this.logger.warn(`R2 upload failed, skipping: ${r2Error}`);
-    }
-
-    // 保存转录结果
+    // 保存转录结果（TranscriptsService 会统一生成 SRT/VTT 并上传到 R2）
     await this.transcriptsService.saveTranscript({
       task_id: taskId,
       segments,
       raw_response: result,
-      raw_url: rawUrl,
-      srt_url: srtUrl,
-      vtt_url: vttUrl,
     });
 
     // 计算费用并更新任务
@@ -313,49 +261,5 @@ export class TaskProcessorService {
     }
 
     return segments;
-  }
-
-  /**
-   * 生成 SRT 格式字幕
-   */
-  private generateSRT(segments: Array<{ start: number; end: number; text: string }>): string {
-    return segments
-      .map((seg, i) => {
-        const startTime = this.formatSRTTime(seg.start);
-        const endTime = this.formatSRTTime(seg.end);
-        return `${i + 1}\n${startTime} --> ${endTime}\n${seg.text}\n`;
-      })
-      .join('\n');
-  }
-
-  /**
-   * 生成 VTT 格式字幕
-   */
-  private generateVTT(segments: Array<{ start: number; end: number; text: string }>): string {
-    const header = 'WEBVTT\n\n';
-    const body = segments
-      .map((seg) => {
-        const startTime = this.formatVTTTime(seg.start);
-        const endTime = this.formatVTTTime(seg.end);
-        return `${startTime} --> ${endTime}\n${seg.text}\n`;
-      })
-      .join('\n');
-    return header + body;
-  }
-
-  private formatSRTTime(seconds: number): string {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-  }
-
-  private formatVTTTime(seconds: number): string {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
   }
 }

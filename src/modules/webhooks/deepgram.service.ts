@@ -1,6 +1,5 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { SupabaseService } from '../../providers/supabase/supabase.service';
-import { R2Service } from '../../providers/r2/r2.service';
 import { DeepgramService } from '../../providers/deepgram/deepgram.service';
 import { TasksService } from '../tasks/tasks.service';
 import { TranscriptsService } from '../transcripts/transcripts.service';
@@ -14,7 +13,6 @@ export class DeepgramWebhookService {
 
   constructor(
     private supabaseService: SupabaseService,
-    private r2Service: R2Service,
     private deepgramService: DeepgramService,
     private tasksService: TasksService,
     private transcriptsService: TranscriptsService,
@@ -74,28 +72,11 @@ export class DeepgramWebhookService {
       // 提取片段
       const segments = this.extractSegments(result);
 
-      // 上传结果到 R2
-      const srtContent = this.generateSRT(segments);
-      const vttContent = this.generateVTT(segments);
-
-      const srtKey = `transcripts/${taskId}/output.srt`;
-      const vttKey = `transcripts/${taskId}/output.vtt`;
-      const rawKey = `transcripts/${taskId}/raw.json`;
-
-      const [srtUrl, vttUrl, rawUrl] = await Promise.all([
-        this.r2Service.uploadFile(srtKey, srtContent, 'text/plain'),
-        this.r2Service.uploadFile(vttKey, vttContent, 'text/plain'),
-        this.r2Service.uploadFile(rawKey, JSON.stringify(body), 'application/json'),
-      ]);
-
-      // 保存转录结果
+      // 保存转录结果（TranscriptsService 会统一生成 SRT/VTT 并上传到 R2）
       await this.transcriptsService.saveTranscript({
         task_id: taskId,
         segments,
         raw_response: body,
-        raw_url: rawUrl,
-        srt_url: srtUrl,
-        vtt_url: vttUrl,
       });
 
       // 计算费用
@@ -178,43 +159,5 @@ export class DeepgramWebhookService {
     }
 
     return segments;
-  }
-
-  private generateSRT(segments: Array<{ start: number; end: number; text: string }>): string {
-    return segments
-      .map((seg, i) => {
-        const startTime = this.formatSRTTime(seg.start);
-        const endTime = this.formatSRTTime(seg.end);
-        return `${i + 1}\n${startTime} --> ${endTime}\n${seg.text}\n`;
-      })
-      .join('\n');
-  }
-
-  private generateVTT(segments: Array<{ start: number; end: number; text: string }>): string {
-    const header = 'WEBVTT\n\n';
-    const body = segments
-      .map((seg) => {
-        const startTime = this.formatVTTTime(seg.start);
-        const endTime = this.formatVTTTime(seg.end);
-        return `${startTime} --> ${endTime}\n${seg.text}\n`;
-      })
-      .join('\n');
-    return header + body;
-  }
-
-  private formatSRTTime(seconds: number): string {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-  }
-
-  private formatVTTTime(seconds: number): string {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
   }
 }
