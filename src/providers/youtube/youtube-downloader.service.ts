@@ -22,8 +22,8 @@ export class YouTubeDownloaderService {
     private configService: ConfigService,
     private r2Service: R2Service,
   ) {
-    // 临时目录用于存放下载的音频
-    this.tempDir = join(process.cwd(), 'tmp', 'youtube');
+    // 使用系统 /tmp 目录（Cloud Run 中可写）
+    this.tempDir = '/tmp/youtube';
     if (!existsSync(this.tempDir)) {
       mkdirSync(this.tempDir, { recursive: true });
     }
