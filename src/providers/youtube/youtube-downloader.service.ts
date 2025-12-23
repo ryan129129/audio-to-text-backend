@@ -69,6 +69,7 @@ export class YouTubeDownloaderService {
   private runYtDlp(url: string, outputPath: string, infoPath: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const args = [
+        '-f', 'bestaudio/best',  // 选择最佳音频，回退到最佳格式
         '--extract-audio',
         '--audio-format', 'm4a',
         '--audio-quality', '0',
@@ -76,7 +77,6 @@ export class YouTubeDownloaderService {
         '--write-info-json',
         '--no-playlist',
         '--no-warnings',
-        '--extractor-args', 'youtube:player_client=android,web',
         '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       ];
 
