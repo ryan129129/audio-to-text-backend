@@ -49,10 +49,16 @@ YouTube URL
 
 使用 `youtube-caption-extractor` 包直接从 YouTube 获取视频字幕。
 
+**多语言支持**：
+- 前端可通过 `params.language` 指定字幕语言
+- 支持的语言代码：`zh`（中文）、`en`（英文）、`ja`（日文）等
+- 如果指定语言的字幕不存在，会获取默认语言
+
 **优点**：
 - 免费（不消耗 Deepgram 配额）
 - 快速（无需下载音频）
 - 质量高（官方字幕或自动生成字幕）
+- 支持多语言字幕
 
 **限制**：
 - 部分视频没有字幕
@@ -80,18 +86,22 @@ if (transcript) {
 **关键参数**：
 ```bash
 yt-dlp \
-  -f bestaudio/best \              # 选择最佳音频格式
-  --extract-audio \
-  --audio-format m4a \
-  --audio-quality 0 \
-  --cookies /tmp/youtube/cookies-xxx.txt \  # 临时 Cookies 文件
+  -f 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best' \
+  --output '/tmp/youtube/xxx.%(ext)s' \
+  --print 'after_move:filepath' \
+  --cookies /tmp/youtube/cookies-xxx.txt \
   <youtube_url>
 ```
 
-**注意**：
-- 使用 `-f bestaudio/best` 确保格式兼容性
-- Cookies 文件从 `/app/cookies/youtube.txt` 复制到 `/tmp/youtube/` 临时目录
-- 复制后设置 `chmod 666` 权限，因为 yt-dlp 需要写入 cookies
+**优化说明**：
+- **不转码**：直接下载原始音频格式，避免 ffmpeg 转码耗时
+- **格式优先级**：优先 m4a，其次 webm，最后任意格式
+- **动态扩展名**：使用 `%(ext)s` 模板，由 yt-dlp 自动填充
+- **Deepgram 兼容**：Deepgram 支持多种音频格式（m4a、webm、opus 等）
+
+**Cookies 处理**：
+- 从 `/app/cookies/youtube.txt`（只读）复制到 `/tmp/youtube/`（可写）
+- 设置 `chmod 666` 权限，因为 yt-dlp 需要写入 cookies
 
 #### 2.2 上传到 R2
 
@@ -195,7 +205,12 @@ YouTube cookies 通常在几个月后过期。需要定期更新：
 
 ## 更新日志
 
-- **2025-12-23**：
+- **2025-12-23**（第二次更新）：
+  - 添加多语言字幕支持（通过 `params.language` 指定）
+  - 优化 yt-dlp 下载性能：移除 ffmpeg 转码，直接下载原始格式
+  - 修复 Deepgram duration 字段读取路径问题
+
+- **2025-12-23**（第一次更新）：
   - 实现 YouTube 字幕优先提取功能
   - 添加 Cookies 支持（通过 Secret Manager 挂载）
   - 修复 cookies 权限问题（复制到 /tmp 并设置可写权限）

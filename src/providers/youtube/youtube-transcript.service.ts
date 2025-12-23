@@ -30,9 +30,10 @@ export class YouTubeTranscriptService {
   /**
    * 获取 YouTube 视频字幕
    * @param videoUrl YouTube 视频 URL
+   * @param language 字幕语言代码（如 'zh', 'en', 'ja'），不传则获取默认语言
    * @returns 字幕结果，如果没有字幕则返回 null
    */
-  async getTranscript(videoUrl: string): Promise<TranscriptResult | null> {
+  async getTranscript(videoUrl: string, language?: string): Promise<TranscriptResult | null> {
     const videoId = this.youtubeService.extractVideoId(videoUrl);
     if (!videoId) {
       this.logger.error(`Invalid YouTube URL: ${videoUrl}`);
@@ -40,10 +41,13 @@ export class YouTubeTranscriptService {
     }
 
     try {
-      this.logger.log(`Fetching transcript for video: ${videoId}`);
+      this.logger.log(`Fetching transcript for video: ${videoId}, language: ${language || 'default'}`);
 
-      // 获取字幕
-      const captionItems: CaptionItem[] = await getSubtitles({ videoID: videoId });
+      // 获取字幕（支持指定语言）
+      const captionItems: CaptionItem[] = await getSubtitles({
+        videoID: videoId,
+        lang: language,
+      });
 
       if (!captionItems || captionItems.length === 0) {
         this.logger.warn(`No transcript available for video: ${videoId}`);
@@ -74,7 +78,7 @@ export class YouTubeTranscriptService {
       return {
         segments,
         fullText,
-        language: 'auto',
+        language: language || 'auto',
         duration,
       };
     } catch (error: any) {

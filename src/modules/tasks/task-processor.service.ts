@@ -44,7 +44,7 @@ export class TaskProcessorService {
 
       // YouTube 优先尝试获取字幕
       if (source_type === SourceType.YOUTUBE) {
-        const transcriptResult = await this.tryGetYouTubeTranscript(task_id, source_url);
+        const transcriptResult = await this.tryGetYouTubeTranscript(task_id, source_url, params?.language);
         if (transcriptResult) {
           // 字幕获取成功，直接返回
           await this.recordTrialUsageIfNeeded(task_id);
@@ -73,12 +73,15 @@ export class TaskProcessorService {
 
   /**
    * 尝试获取 YouTube 字幕
+   * @param taskId 任务 ID
+   * @param youtubeUrl YouTube 视频 URL
+   * @param language 字幕语言代码（如 'zh', 'en'）
    * @returns 成功返回 true，失败返回 false
    */
-  private async tryGetYouTubeTranscript(taskId: string, youtubeUrl: string): Promise<boolean> {
+  private async tryGetYouTubeTranscript(taskId: string, youtubeUrl: string, language?: string): Promise<boolean> {
     try {
-      this.logger.log(`Trying to get YouTube transcript for task ${taskId}`);
-      const transcript = await this.youtubeTranscript.getTranscript(youtubeUrl);
+      this.logger.log(`Trying to get YouTube transcript for task ${taskId}, language: ${language || 'default'}`);
+      const transcript = await this.youtubeTranscript.getTranscript(youtubeUrl, language);
 
       if (!transcript) {
         return false;
