@@ -22,11 +22,7 @@ WORKDIR /app
 
 # Install system dependencies
 # - dumb-init: proper signal handling
-# - ffmpeg: audio processing for yt-dlp
-# - python3: required by yt-dlp
-# - yt-dlp: YouTube downloader (use latest version)
-RUN apk add --no-cache dumb-init ffmpeg python3 py3-pip && \
-    pip3 install --break-system-packages --upgrade yt-dlp
+RUN apk add --no-cache dumb-init
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
@@ -41,8 +37,8 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Create tmp directory for YouTube downloads and set permissions
-RUN mkdir -p /tmp/youtube && chmod 777 /tmp/youtube && chown -R nestjs:nodejs /app
+# Set permissions
+RUN chown -R nestjs:nodejs /app
 
 USER nestjs
 

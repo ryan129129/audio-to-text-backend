@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SupabaseService } from '../../providers/supabase/supabase.service';
 import { DeepgramService } from '../../providers/deepgram/deepgram.service';
-import { YouTubeDownloaderService } from '../../providers/youtube/youtube-downloader.service';
-import { YouTubeTranscriptService } from '../../providers/youtube/youtube-transcript.service';
+import { SupadataService, TranscriptResult } from '../../providers/supadata/supadata.service';
 import { TranscriptsService } from '../transcripts/transcripts.service';
 import { AuthService } from '../auth/auth.service';
 import { TaskStatus, SourceType } from '../../database/entities';
@@ -23,8 +22,7 @@ export class TaskProcessorService {
   constructor(
     private supabaseService: SupabaseService,
     private deepgramService: DeepgramService,
-    private youtubeDownloader: YouTubeDownloaderService,
-    private youtubeTranscript: YouTubeTranscriptService,
+    private supadataService: SupadataService,
     private transcriptsService: TranscriptsService,
     private authService: AuthService,
   ) {}
@@ -40,21 +38,34 @@ export class TaskProcessorService {
       // 更新状态为 processing
       await this.updateTaskStatus(task_id, TaskStatus.PROCESSING);
 
-      // YouTube 优先尝试获取字幕
+      let result: TranscriptResult;
+      let costMinutes = 0;
+
       if (source_type === SourceType.YOUTUBE) {
-        const transcriptResult = await this.tryGetYouTubeTranscript(task_id, source_url, params?.language);
-        if (transcriptResult) {
-          // 字幕获取成功，直接返回
-          await this.recordTrialUsageIfNeeded(task_id);
-          this.logger.log(`Task ${task_id} completed successfully (YouTube transcript)`);
-          return;
+        // YouTube 使用 Supadata 处理（支持自动获取字幕或 AI 生成）
+        result = await this.processWithSupadata(source_url, params?.language);
+        // Supadata 计费：现成字幕免费(isGenerated=false)，AI 生成按分钟计费
+        if (result.isGenerated) {
+          costMinutes = Math.ceil(result.duration / 60);
         }
-        // 没有字幕，回退到下载音频 + Deepgram 转录
-        this.logger.log(`No YouTube transcript available, falling back to audio download`);
+      } else {
+        // 上传的音频文件使用 Deepgram
+        result = await this.processWithDeepgram(source_url, params);
+        costMinutes = Math.ceil(result.duration / 60);
       }
 
-      // 常规流程：下载音频（如果需要）+ Deepgram 转录
-      await this.processWithDeepgram(task_id, source_type, source_url, params);
+      // 保存转录结果
+      await this.transcriptsService.saveTranscript({
+        task_id,
+        segments: result.segments,
+        raw_response: result,
+      });
+
+      // 更新任务状态
+      await this.updateTaskStatus(task_id, TaskStatus.SUCCEEDED, {
+        duration_sec: result.duration,
+        cost_minutes: costMinutes,
+      });
 
       // 记录体验使用（如果是体验任务）
       await this.recordTrialUsageIfNeeded(task_id);
@@ -70,84 +81,42 @@ export class TaskProcessorService {
   }
 
   /**
-   * 尝试获取 YouTube 字幕
-   * @param taskId 任务 ID
-   * @param youtubeUrl YouTube 视频 URL
-   * @param language 字幕语言代码（如 'zh', 'en'）
-   * @returns 成功返回 true，失败返回 false
+   * 使用 Supadata 处理 YouTube 视频转录
+   * 自动获取现成字幕，无字幕时使用 AI 生成
    */
-  private async tryGetYouTubeTranscript(taskId: string, youtubeUrl: string, language?: string): Promise<boolean> {
-    try {
-      this.logger.log(`Trying to get YouTube transcript for task ${taskId}, language: ${language || 'default'}`);
-      const transcript = await this.youtubeTranscript.getTranscript(youtubeUrl, language);
-
-      if (!transcript) {
-        return false;
-      }
-
-      const { segments, duration } = transcript;
-
-      // 保存转录结果（TranscriptsService 会统一生成 SRT/VTT 并上传到 R2）
-      await this.transcriptsService.saveTranscript({
-        task_id: taskId,
-        segments,
-        raw_response: transcript,
-      });
-
-      // 更新任务状态（YouTube 字幕免费，cost_minutes 为 0）
-      await this.updateTaskStatus(taskId, TaskStatus.SUCCEEDED, {
-        duration_sec: duration,
-        cost_minutes: 0,  // YouTube 字幕不消耗配额
-      });
-
-      this.logger.log(`YouTube transcript fetched successfully: ${segments.length} segments`);
-      return true;
-    } catch (error) {
-      this.logger.warn(`Failed to get YouTube transcript: ${error}`);
-      return false;
-    }
+  private async processWithSupadata(videoUrl: string, language?: string): Promise<TranscriptResult> {
+    this.logger.log(`Processing YouTube video with Supadata: ${videoUrl}`);
+    const result = await this.supadataService.getTranscript(videoUrl, language, 'auto');
+    this.logger.log(`Supadata result: ${result.segments.length} segments, duration: ${result.duration}s, generated: ${result.isGenerated}`);
+    return result;
   }
 
   /**
-   * 使用 Deepgram 进行转录
+   * 使用 Deepgram 进行转录（用于上传的音频文件）
    */
   private async processWithDeepgram(
-    taskId: string,
-    sourceType: SourceType,
-    sourceUrl: string,
+    audioUrl: string,
     params?: Record<string, any> | null,
-  ): Promise<void> {
-    let audioUrl = sourceUrl;
+  ): Promise<TranscriptResult> {
+    this.logger.log(`Processing audio with Deepgram: ${audioUrl}`);
 
-    // YouTube 需要先下载音频
-    if (sourceType === SourceType.YOUTUBE) {
-      audioUrl = await this.downloadYouTubeAudio(taskId, sourceUrl);
-    }
-
-    // 调用 Deepgram 进行转录（同步模式）
+    // 调用 Deepgram 进行转录
     const result = await this.deepgramService.transcribeUrlSync(audioUrl, {
       diarize: true,
       detect_language: params?.detect_language ?? true,
       language: params?.language,
     });
 
-    // 处理转录结果
-    const duration = result.duration;
+    // 提取片段
     const segments = this.extractSegments(result);
+    const duration = result.duration;
 
-    // 保存转录结果（TranscriptsService 会统一生成 SRT/VTT 并上传到 R2）
-    await this.transcriptsService.saveTranscript({
-      task_id: taskId,
+    return {
       segments,
-      raw_response: result,
-    });
-
-    // 计算费用并更新任务
-    const costMinutes = Math.ceil(duration / 60);
-    await this.updateTaskStatus(taskId, TaskStatus.SUCCEEDED, {
-      duration_sec: duration,
-      cost_minutes: costMinutes,
-    });
+      duration,
+      language: params?.language || 'unknown',
+      isGenerated: true,  // Deepgram 总是 AI 生成
+    };
   }
 
   /**
@@ -197,16 +166,6 @@ export class TaskProcessorService {
       this.logger.log(`Recording trial usage for task ${taskId}`);
       await this.authService.recordTrialUsage(task.user_id, task.anon_id);
     }
-  }
-
-  /**
-   * 下载 YouTube 音频并上传到 R2
-   */
-  private async downloadYouTubeAudio(taskId: string, youtubeUrl: string): Promise<string> {
-    this.logger.log(`Downloading YouTube audio for task ${taskId}`);
-    const result = await this.youtubeDownloader.downloadAndUpload(youtubeUrl, taskId);
-    this.logger.log(`YouTube audio downloaded: ${result.audioUrl}, duration: ${result.duration}s`);
-    return result.audioUrl;
   }
 
   /**

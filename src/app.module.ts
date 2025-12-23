@@ -10,6 +10,7 @@ import { SupabaseModule } from './providers/supabase/supabase.module';
 import { R2Module } from './providers/r2/r2.module';
 import { DeepgramModule } from './providers/deepgram/deepgram.module';
 import { YouTubeModule } from './providers/youtube/youtube.module';
+import { SupadataModule } from './providers/supadata/supadata.module';
 import { StripeModule } from './providers/stripe/stripe.module';
 
 // Business Modules
@@ -42,6 +43,7 @@ export class AppModule {
       R2Module,
       DeepgramModule,
       YouTubeModule,
+      SupadataModule,
       StripeModule,
 
       // Business Modules

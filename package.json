@@ -44,8 +44,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "stripe": "^20.1.0",
-    "uuid": "^13.0.0",
-    "youtube-caption-extractor": "^1.9.1"
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.14",
