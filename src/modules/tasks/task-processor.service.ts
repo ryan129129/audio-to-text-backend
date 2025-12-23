@@ -3,6 +3,7 @@ import { SupabaseService } from '../../providers/supabase/supabase.service';
 import { DeepgramService } from '../../providers/deepgram/deepgram.service';
 import { R2Service } from '../../providers/r2/r2.service';
 import { YouTubeDownloaderService } from '../../providers/youtube/youtube-downloader.service';
+import { YouTubeTranscriptService } from '../../providers/youtube/youtube-transcript.service';
 import { TranscriptsService } from '../transcripts/transcripts.service';
 import { AuthService } from '../auth/auth.service';
 import { TaskStatus, SourceType } from '../../database/entities';
@@ -25,6 +26,7 @@ export class TaskProcessorService {
     private deepgramService: DeepgramService,
     private r2Service: R2Service,
     private youtubeDownloader: YouTubeDownloaderService,
+    private youtubeTranscript: YouTubeTranscriptService,
     private transcriptsService: TranscriptsService,
     private authService: AuthService,
   ) {}
@@ -40,62 +42,21 @@ export class TaskProcessorService {
       // 更新状态为 processing
       await this.updateTaskStatus(task_id, TaskStatus.PROCESSING);
 
-      let audioUrl = source_url;
-
-      // YouTube 需要先下载音频
+      // YouTube 优先尝试获取字幕
       if (source_type === SourceType.YOUTUBE) {
-        audioUrl = await this.downloadYouTubeAudio(task_id, source_url);
+        const transcriptResult = await this.tryGetYouTubeTranscript(task_id, source_url);
+        if (transcriptResult) {
+          // 字幕获取成功，直接返回
+          await this.recordTrialUsageIfNeeded(task_id);
+          this.logger.log(`Task ${task_id} completed successfully (YouTube transcript)`);
+          return;
+        }
+        // 没有字幕，回退到下载音频 + Deepgram 转录
+        this.logger.log(`No YouTube transcript available, falling back to audio download`);
       }
 
-      // 调用 Deepgram 进行转录（同步模式）
-      const result = await this.deepgramService.transcribeUrlSync(audioUrl, {
-        diarize: true,
-        detect_language: params?.detect_language ?? true,
-        language: params?.language,
-      });
-
-      // 处理转录结果
-      const duration = result.duration;
-      const segments = this.extractSegments(result);
-
-      // 生成 SRT/VTT 文件并上传到 R2
-      const srtContent = this.generateSRT(segments);
-      const vttContent = this.generateVTT(segments);
-
-      let srtUrl = '';
-      let vttUrl = '';
-      let rawUrl = '';
-
-      try {
-        const srtKey = `transcripts/${task_id}/output.srt`;
-        const vttKey = `transcripts/${task_id}/output.vtt`;
-        const rawKey = `transcripts/${task_id}/raw.json`;
-
-        [srtUrl, vttUrl, rawUrl] = await Promise.all([
-          this.r2Service.uploadFile(srtKey, srtContent, 'text/plain'),
-          this.r2Service.uploadFile(vttKey, vttContent, 'text/plain'),
-          this.r2Service.uploadFile(rawKey, JSON.stringify(result), 'application/json'),
-        ]);
-      } catch (r2Error) {
-        this.logger.warn(`R2 upload failed, skipping: ${r2Error}`);
-      }
-
-      // 保存转录结果
-      await this.transcriptsService.saveTranscript({
-        task_id,
-        segments,
-        raw_response: result,
-        raw_url: rawUrl,
-        srt_url: srtUrl,
-        vtt_url: vttUrl,
-      });
-
-      // 计算费用并更新任务
-      const costMinutes = Math.ceil(duration / 60);
-      await this.updateTaskStatus(task_id, TaskStatus.SUCCEEDED, {
-        duration_sec: duration,
-        cost_minutes: costMinutes,
-      });
+      // 常规流程：下载音频（如果需要）+ Deepgram 转录
+      await this.processWithDeepgram(task_id, source_type, source_url, params);
 
       // 记录体验使用（如果是体验任务）
       await this.recordTrialUsageIfNeeded(task_id);
@@ -108,6 +69,134 @@ export class TaskProcessorService {
       });
       throw error;
     }
+  }
+
+  /**
+   * 尝试获取 YouTube 字幕
+   * @returns 成功返回 true，失败返回 false
+   */
+  private async tryGetYouTubeTranscript(taskId: string, youtubeUrl: string): Promise<boolean> {
+    try {
+      this.logger.log(`Trying to get YouTube transcript for task ${taskId}`);
+      const transcript = await this.youtubeTranscript.getTranscript(youtubeUrl);
+
+      if (!transcript) {
+        return false;
+      }
+
+      const { segments, duration } = transcript;
+
+      // 生成 SRT/VTT 文件并上传到 R2
+      const srtContent = this.generateSRT(segments);
+      const vttContent = this.generateVTT(segments);
+
+      let srtUrl = '';
+      let vttUrl = '';
+      let rawUrl = '';
+
+      try {
+        const srtKey = `transcripts/${taskId}/output.srt`;
+        const vttKey = `transcripts/${taskId}/output.vtt`;
+        const rawKey = `transcripts/${taskId}/raw.json`;
+
+        [srtUrl, vttUrl, rawUrl] = await Promise.all([
+          this.r2Service.uploadFile(srtKey, srtContent, 'text/plain'),
+          this.r2Service.uploadFile(vttKey, vttContent, 'text/plain'),
+          this.r2Service.uploadFile(rawKey, JSON.stringify(transcript), 'application/json'),
+        ]);
+      } catch (r2Error) {
+        this.logger.warn(`R2 upload failed, skipping: ${r2Error}`);
+      }
+
+      // 保存转录结果
+      await this.transcriptsService.saveTranscript({
+        task_id: taskId,
+        segments,
+        raw_response: transcript,
+        raw_url: rawUrl,
+        srt_url: srtUrl,
+        vtt_url: vttUrl,
+      });
+
+      // 更新任务状态（YouTube 字幕免费，cost_minutes 为 0）
+      await this.updateTaskStatus(taskId, TaskStatus.SUCCEEDED, {
+        duration_sec: duration,
+        cost_minutes: 0,  // YouTube 字幕不消耗配额
+      });
+
+      this.logger.log(`YouTube transcript fetched successfully: ${segments.length} segments`);
+      return true;
+    } catch (error) {
+      this.logger.warn(`Failed to get YouTube transcript: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * 使用 Deepgram 进行转录
+   */
+  private async processWithDeepgram(
+    taskId: string,
+    sourceType: SourceType,
+    sourceUrl: string,
+    params?: Record<string, any> | null,
+  ): Promise<void> {
+    let audioUrl = sourceUrl;
+
+    // YouTube 需要先下载音频
+    if (sourceType === SourceType.YOUTUBE) {
+      audioUrl = await this.downloadYouTubeAudio(taskId, sourceUrl);
+    }
+
+    // 调用 Deepgram 进行转录（同步模式）
+    const result = await this.deepgramService.transcribeUrlSync(audioUrl, {
+      diarize: true,
+      detect_language: params?.detect_language ?? true,
+      language: params?.language,
+    });
+
+    // 处理转录结果
+    const duration = result.duration;
+    const segments = this.extractSegments(result);
+
+    // 生成 SRT/VTT 文件并上传到 R2
+    const srtContent = this.generateSRT(segments);
+    const vttContent = this.generateVTT(segments);
+
+    let srtUrl = '';
+    let vttUrl = '';
+    let rawUrl = '';
+
+    try {
+      const srtKey = `transcripts/${taskId}/output.srt`;
+      const vttKey = `transcripts/${taskId}/output.vtt`;
+      const rawKey = `transcripts/${taskId}/raw.json`;
+
+      [srtUrl, vttUrl, rawUrl] = await Promise.all([
+        this.r2Service.uploadFile(srtKey, srtContent, 'text/plain'),
+        this.r2Service.uploadFile(vttKey, vttContent, 'text/plain'),
+        this.r2Service.uploadFile(rawKey, JSON.stringify(result), 'application/json'),
+      ]);
+    } catch (r2Error) {
+      this.logger.warn(`R2 upload failed, skipping: ${r2Error}`);
+    }
+
+    // 保存转录结果
+    await this.transcriptsService.saveTranscript({
+      task_id: taskId,
+      segments,
+      raw_response: result,
+      raw_url: rawUrl,
+      srt_url: srtUrl,
+      vtt_url: vttUrl,
+    });
+
+    // 计算费用并更新任务
+    const costMinutes = Math.ceil(duration / 60);
+    await this.updateTaskStatus(taskId, TaskStatus.SUCCEEDED, {
+      duration_sec: duration,
+      cost_minutes: costMinutes,
+    });
   }
 
   /**
