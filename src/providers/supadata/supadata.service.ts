@@ -208,24 +208,30 @@ export class SupadataService {
       speaker: null as string | null,  // Supadata 不提供说话人信息
     }));
 
-    // 使用 LLM 合并 segments
-    if (!this.openAIService.isAvailable()) {
-      throw new Error('OpenAI service not available. Please configure OPENAI_API_KEY.');
-    }
+    let segments = rawSegments;
 
-    this.logger.log('Using LLM to merge segments...');
-    const segments = await this.openAIService.mergeTranscriptSegments(rawSegments, {
-      language: language || data.lang,
-    });
+    // 仅 AI 生成的转录需要 LLM 合并（碎片化严重）
+    // 现成字幕已经是完整句子，无需合并
+    if (isGenerated) {
+      if (!this.openAIService.isAvailable()) {
+        throw new Error('OpenAI service not available. Please configure OPENAI_API_KEY.');
+      }
+
+      this.logger.log('AI generated transcript, using LLM to merge segments...');
+      segments = await this.openAIService.mergeTranscriptSegments(rawSegments, {
+        language: language || data.lang,
+      });
+
+      this.logger.log(
+        `Merged ${rawSegments.length} raw segments -> ${segments.length} segments`
+      );
+    } else {
+      this.logger.log(`Native transcript with ${rawSegments.length} segments, skipping LLM merge`);
+    }
 
     // 计算总时长
     const lastSegment = segments[segments.length - 1];
     const duration = lastSegment ? lastSegment.end : 0;
-
-    this.logger.log(
-      `Parsed ${rawSegments.length} raw segments -> merged to ${segments.length} segments, ` +
-      `duration: ${duration.toFixed(1)}s, generated: ${isGenerated}`
-    );
 
     return {
       segments,

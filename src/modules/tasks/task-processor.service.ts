@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { SupabaseService } from '../../providers/supabase/supabase.service';
 import { DeepgramService } from '../../providers/deepgram/deepgram.service';
 import { SupadataService, TranscriptResult } from '../../providers/supadata/supadata.service';
+import { OpenAIService } from '../../providers/openai/openai.service';
 import { TranscriptsService } from '../transcripts/transcripts.service';
 import { AuthService } from '../auth/auth.service';
 import { TaskStatus, SourceType } from '../../database/entities';
@@ -23,6 +24,7 @@ export class TaskProcessorService {
     private supabaseService: SupabaseService,
     private deepgramService: DeepgramService,
     private supadataService: SupadataService,
+    private openAIService: OpenAIService,
     private transcriptsService: TranscriptsService,
     private authService: AuthService,
   ) {}
@@ -93,6 +95,7 @@ export class TaskProcessorService {
 
   /**
    * 使用 Deepgram 进行转录（用于上传的音频文件）
+   * 注意：params.language 是目标翻译语言，不是音频源语言
    */
   private async processWithDeepgram(
     audioUrl: string,
@@ -100,16 +103,23 @@ export class TaskProcessorService {
   ): Promise<TranscriptResult> {
     this.logger.log(`Processing audio with Deepgram: ${audioUrl}`);
 
-    // 调用 Deepgram 进行转录
+    // 调用 Deepgram 进行转录（让 Deepgram 自动检测音频语言）
     const result = await this.deepgramService.transcribeUrlSync(audioUrl, {
       diarize: true,
-      detect_language: params?.detect_language ?? true,
-      language: params?.language,
+      detect_language: true,  // 始终自动检测音频语言
     });
 
-    // 提取片段
-    const segments = this.extractSegments(result);
+    // 提取片段（Deepgram utterances 已经是完整句子，无需合并）
+    let segments = this.extractSegments(result);
     const duration = result.duration;
+
+    // 如果指定了目标语言，进行翻译
+    const targetLanguage = params?.language;
+    if (targetLanguage && this.openAIService.isAvailable()) {
+      this.logger.log(`Translating ${segments.length} segments to ${targetLanguage}...`);
+      segments = await this.openAIService.translateSegments(segments, targetLanguage);
+      this.logger.log(`Translation completed`);
+    }
 
     return {
       segments,
@@ -170,6 +180,7 @@ export class TaskProcessorService {
 
   /**
    * 从 Deepgram 结果提取片段
+   * 优先使用 utterances（按语义分段），fallback 到 words
    */
   private extractSegments(result: any): Array<{
     start: number;
@@ -177,6 +188,19 @@ export class TaskProcessorService {
     text: string;
     speaker: string | null;
   }> {
+    // 优先使用 utterances（Deepgram 按语义分段的结果）
+    if (result.utterances && result.utterances.length > 0) {
+      this.logger.log(`Using ${result.utterances.length} utterances from Deepgram`);
+      return result.utterances.map((utterance: any) => ({
+        start: utterance.start,
+        end: utterance.end,
+        text: utterance.transcript,
+        speaker: utterance.speaker !== undefined ? `Speaker ${utterance.speaker}` : null,
+      }));
+    }
+
+    // Fallback: 从 words 构建 segments（按 speaker + 时间间隔分段）
+    this.logger.log('No utterances, building segments from words');
     const segments: Array<{
       start: number;
       end: number;
@@ -188,12 +212,22 @@ export class TaskProcessorService {
     if (!channel) return segments;
 
     const words = channel.alternatives?.[0]?.words || [];
+    if (words.length === 0) return segments;
+
+    // 按 speaker 变化或时间间隔（超过 1 秒）分段
+    const TIME_GAP_THRESHOLD = 1.0; // 秒
     let currentSegment: { start: number; end: number; text: string; speaker: number | null } | null = null;
 
     for (const word of words) {
       const speaker = word.speaker ?? null;
+      const wordText = word.punctuated_word || word.word;
 
-      if (!currentSegment || currentSegment.speaker !== speaker) {
+      // 判断是否需要开始新 segment
+      const shouldStartNew = !currentSegment ||
+        currentSegment.speaker !== speaker ||
+        (word.start - currentSegment.end) > TIME_GAP_THRESHOLD;
+
+      if (shouldStartNew) {
         if (currentSegment) {
           segments.push({
             ...currentSegment,
@@ -203,12 +237,12 @@ export class TaskProcessorService {
         currentSegment = {
           start: word.start,
           end: word.end,
-          text: word.word,
+          text: wordText,
           speaker,
         };
       } else {
-        currentSegment.end = word.end;
-        currentSegment.text += ' ' + word.word;
+        currentSegment!.end = word.end;
+        currentSegment!.text += ' ' + wordText;
       }
     }
 
@@ -219,6 +253,7 @@ export class TaskProcessorService {
       });
     }
 
+    this.logger.log(`Built ${segments.length} segments from ${words.length} words`);
     return segments;
   }
 }

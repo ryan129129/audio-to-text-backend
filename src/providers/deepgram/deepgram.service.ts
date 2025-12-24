@@ -10,6 +10,24 @@ export interface DeepgramTranscriptionOptions {
   callback_url?: string;
 }
 
+// Deepgram utterance（按语义分段的结果）
+export interface DeepgramUtterance {
+  start: number;
+  end: number;
+  confidence: number;
+  channel: number;
+  transcript: string;
+  speaker?: number;
+  words: Array<{
+    word: string;
+    start: number;
+    end: number;
+    confidence: number;
+    speaker?: number;
+    punctuated_word?: string;
+  }>;
+}
+
 export interface DeepgramResult {
   duration: number;
   channels: Array<{
@@ -22,9 +40,12 @@ export interface DeepgramResult {
         end: number;
         confidence: number;
         speaker?: number;
+        punctuated_word?: string;
       }>;
     }>;
   }>;
+  // utterances 是按语义分段的结果，比 words 更适合做字幕
+  utterances?: DeepgramUtterance[];
 }
 
 @Injectable()
@@ -125,10 +146,18 @@ export class DeepgramService implements OnModuleInit {
     }
 
     const result = await response.json();
-    // duration 在 metadata 中，channels 在 results 中
+
+    this.logger.log(
+      `Deepgram response: duration=${result.metadata?.duration}s, ` +
+      `utterances=${result.results?.utterances?.length || 0}, ` +
+      `words=${result.results?.channels?.[0]?.alternatives?.[0]?.words?.length || 0}`
+    );
+
+    // duration 在 metadata 中，channels 和 utterances 在 results 中
     return {
       duration: result.metadata?.duration || 0,
       channels: result.results?.channels || [],
+      utterances: result.results?.utterances || [],
     } as DeepgramResult;
   }
 
