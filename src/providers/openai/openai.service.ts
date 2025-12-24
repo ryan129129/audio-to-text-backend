@@ -94,8 +94,8 @@ export class OpenAIService {
       return mergedSegments;
     } catch (error) {
       this.logger.error(`LLM merge failed: ${error}`);
-      // 失败时返回原始 segments
-      return segments;
+      // 失败时抛出错误，不 fallback
+      throw new Error(`LLM merge failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
