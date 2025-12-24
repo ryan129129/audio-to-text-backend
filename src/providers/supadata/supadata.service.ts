@@ -190,18 +190,24 @@ export class SupadataService {
     }
 
     // 带时间戳的字幕
-    const segments = data.content.map((chunk) => ({
+    const rawSegments = data.content.map((chunk) => ({
       start: chunk.offset / 1000,  // ms -> s
       end: (chunk.offset + chunk.duration) / 1000,
       text: chunk.text.trim(),
-      speaker: null,  // Supadata 不提供说话人信息
+      speaker: null as string | null,  // Supadata 不提供说话人信息
     }));
+
+    // 合并短片段为完整句子
+    const segments = this.mergeSegments(rawSegments);
 
     // 计算总时长
     const lastSegment = segments[segments.length - 1];
     const duration = lastSegment ? lastSegment.end : 0;
 
-    this.logger.log(`Parsed ${segments.length} segments, duration: ${duration.toFixed(1)}s, generated: ${isGenerated}`);
+    this.logger.log(
+      `Parsed ${rawSegments.length} raw segments -> merged to ${segments.length} segments, ` +
+      `duration: ${duration.toFixed(1)}s, generated: ${isGenerated}`
+    );
 
     return {
       segments,
@@ -209,6 +215,106 @@ export class SupadataService {
       language: data.lang || 'unknown',
       isGenerated,
     };
+  }
+
+  /**
+   * 合并短片段为完整句子
+   * 规则：
+   * 1. 时间间隔小于阈值时合并
+   * 2. 遇到句末标点（。！？.!?）时断句
+   * 3. 不同 speaker 不合并
+   * 4. 单个 segment 不超过最大长度
+   */
+  private mergeSegments(
+    segments: Array<{ start: number; end: number; text: string; speaker: string | null }>,
+    options: {
+      maxGapSeconds?: number;    // 最大时间间隔，超过则断句（默认 1.5 秒）
+      maxLengthChars?: number;   // 单个 segment 最大字符数（默认 200）
+    } = {},
+  ): Array<{ start: number; end: number; text: string; speaker: string | null }> {
+    const { maxGapSeconds = 1.5, maxLengthChars = 200 } = options;
+
+    if (segments.length === 0) return [];
+
+    // 句末标点符号（中英文）
+    const sentenceEndPattern = /[。！？.!?]$/;
+
+    const merged: Array<{ start: number; end: number; text: string; speaker: string | null }> = [];
+    let current: { start: number; end: number; text: string; speaker: string | null } | null = null;
+
+    for (const seg of segments) {
+      if (!current) {
+        // 初始化第一个 segment
+        current = { ...seg };
+        continue;
+      }
+
+      // 判断是否需要断句
+      const gap = seg.start - current.end;
+      const differentSpeaker = current.speaker !== seg.speaker;
+      const endsWithPunctuation = sentenceEndPattern.test(current.text);
+      const wouldExceedMaxLength = (current.text + seg.text).length > maxLengthChars;
+      const gapTooLarge = gap > maxGapSeconds;
+
+      if (differentSpeaker || endsWithPunctuation || wouldExceedMaxLength || gapTooLarge) {
+        // 保存当前 segment，开始新的
+        merged.push(current);
+        current = { ...seg };
+      } else {
+        // 合并到当前 segment
+        current.end = seg.end;
+        current.text = this.smartJoinText(current.text, seg.text);
+      }
+    }
+
+    // 保存最后一个 segment
+    if (current) {
+      // 最终清理：去除中文字符之间的多余空格
+      current.text = this.cleanChineseSpaces(current.text);
+      merged.push(current);
+    }
+
+    return merged;
+  }
+
+  /**
+   * 智能拼接文本
+   * - 英文单词之间：保留/添加空格
+   * - 中文字符之间：不加空格
+   * - 中英文混合：根据边界字符决定
+   */
+  private smartJoinText(left: string, right: string): string {
+    if (!left) return right;
+    if (!right) return left;
+
+    const lastChar = left[left.length - 1];
+    const firstChar = right[0];
+
+    // 英文/数字之间需要空格
+    const isLastAlphanumeric = /[a-zA-Z0-9]/.test(lastChar);
+    const isFirstAlphanumeric = /[a-zA-Z0-9]/.test(firstChar);
+    if (isLastAlphanumeric && isFirstAlphanumeric) {
+      return left + ' ' + right;
+    }
+
+    // 其他情况直接拼接（中文之间、中英混合边界）
+    return left + right;
+  }
+
+  /**
+   * 清理中文字符之间的多余空格
+   * 保留英文单词之间的空格
+   */
+  private cleanChineseSpaces(text: string): string {
+    // 匹配：中文 + 空格 + 中文，去掉中间的空格
+    // 使用循环处理连续的情况
+    let result = text;
+    let prev = '';
+    while (result !== prev) {
+      prev = result;
+      result = result.replace(/([\u4e00-\u9fa5，。！？、：；""''（）【】])\s+([\u4e00-\u9fa5，。！？、：；""''（）【】])/g, '$1$2');
+    }
+    return result;
   }
 
   private sleep(ms: number): Promise<void> {
