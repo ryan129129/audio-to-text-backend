@@ -39,8 +39,7 @@ export class OpenAIService {
   async mergeTranscriptSegments(
     segments: TranscriptSegment[],
     options: {
-      language?: string;      // 源语言
-      translateTo?: string;   // 翻译目标语言（可选）
+      language?: string;      // 目标语言（用于翻译）
     } = {},
   ): Promise<TranscriptSegment[]> {
     if (!this.client) {
@@ -52,7 +51,7 @@ export class OpenAIService {
       return [];
     }
 
-    const { language, translateTo } = options;
+    const { language } = options;
 
     // 构建输入数据（简化格式减少 token）
     const inputData = segments.map((seg, idx) => ({
@@ -63,7 +62,7 @@ export class OpenAIService {
       sp: seg.speaker,  // 说话人
     }));
 
-    const systemPrompt = this.buildMergePrompt(language, translateTo);
+    const systemPrompt = this.buildMergePrompt(language);
 
     try {
       this.logger.log(`Merging ${segments.length} segments with LLM...`);
@@ -101,8 +100,9 @@ export class OpenAIService {
 
   /**
    * 构建合并 Prompt
+   * @param language 目标语言（如果指定，则翻译成该语言）
    */
-  private buildMergePrompt(language?: string, translateTo?: string): string {
+  private buildMergePrompt(language?: string): string {
     let prompt = `你是一个专业的字幕处理助手。你的任务是将碎片化的转录文本合并成完整的句子。
 
 ## 输入格式
@@ -134,9 +134,9 @@ JSON 数组，每个元素包含：
 5. 修正明显的语音识别错误（如 "我是 老高" 应为 "我是老高"）
 6. 去除不必要的空格，但保留英文单词之间的空格`;
 
-    if (translateTo) {
+    if (language) {
       prompt += `
-7. 将文本翻译成${translateTo}`;
+7. 将文本翻译成${language}语言`;
     }
 
     prompt += `
