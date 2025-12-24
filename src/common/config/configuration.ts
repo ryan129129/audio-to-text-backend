@@ -34,6 +34,10 @@ export default () => ({
     apiKey: process.env.SUPADATA_API_KEY,
   },
 
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY,
+  },
+
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,

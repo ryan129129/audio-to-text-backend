@@ -11,6 +11,7 @@ import { R2Module } from './providers/r2/r2.module';
 import { DeepgramModule } from './providers/deepgram/deepgram.module';
 import { YouTubeModule } from './providers/youtube/youtube.module';
 import { SupadataModule } from './providers/supadata/supadata.module';
+import { OpenAIModule } from './providers/openai/openai.module';
 import { StripeModule } from './providers/stripe/stripe.module';
 
 // Business Modules
@@ -44,6 +45,7 @@ export class AppModule {
       DeepgramModule,
       YouTubeModule,
       SupadataModule,
+      OpenAIModule,
       StripeModule,
 
       // Business Modules

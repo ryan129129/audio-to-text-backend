@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { OpenAIService } from '../openai/openai.service';
 
 // Supadata API 响应中的字幕片段
 interface SupadataChunk {
@@ -40,7 +41,10 @@ export class SupadataService {
   private readonly apiKey: string;
   private readonly baseUrl = 'https://api.supadata.ai/v1';
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private openAIService: OpenAIService,
+  ) {
     this.apiKey = this.configService.get<string>('SUPADATA_API_KEY') || '';
     if (!this.apiKey) {
       this.logger.warn('SUPADATA_API_KEY not configured');
@@ -89,7 +93,7 @@ export class SupadataService {
     }
 
     const data: SupadataResponse = await response.json();
-    return this.parseResponse(data, mode !== 'native');
+    return this.parseResponse(data, mode !== 'native', language);
   }
 
   /**
@@ -160,7 +164,7 @@ export class SupadataService {
       // 有 content 表示处理完成
       if (data.content !== undefined) {
         this.logger.log(`Job ${jobId} completed after ${attempt} attempts`);
-        return this.parseResponse(data as SupadataResponse, isGenerated);
+        return this.parseResponse(data as SupadataResponse, isGenerated, undefined);
       }
 
       // 其他未知状态
@@ -172,8 +176,15 @@ export class SupadataService {
 
   /**
    * 解析 Supadata 响应为统一格式
+   * @param data Supadata API 响应
+   * @param isGenerated 是否为 AI 生成（用于决定是否使用 LLM 合并）
+   * @param language 语言代码（用于 LLM 合并）
    */
-  private parseResponse(data: SupadataResponse, isGenerated: boolean): TranscriptResult {
+  private async parseResponse(
+    data: SupadataResponse,
+    isGenerated: boolean,
+    language?: string,
+  ): Promise<TranscriptResult> {
     // 如果返回的是纯文本（text=true 参数）
     if (typeof data.content === 'string') {
       return {
@@ -197,8 +208,18 @@ export class SupadataService {
       speaker: null as string | null,  // Supadata 不提供说话人信息
     }));
 
-    // 合并短片段为完整句子
-    const segments = this.mergeSegments(rawSegments);
+    let segments: typeof rawSegments;
+
+    // AI 生成的结果使用 LLM 合并（如果可用）
+    if (isGenerated && this.openAIService.isAvailable()) {
+      this.logger.log('Using LLM to merge segments...');
+      segments = await this.openAIService.mergeTranscriptSegments(rawSegments, {
+        language: language || data.lang,
+      });
+    } else {
+      // 现成字幕或 LLM 不可用时，使用规则合并
+      segments = this.mergeSegments(rawSegments);
+    }
 
     // 计算总时长
     const lastSegment = segments[segments.length - 1];
@@ -206,7 +227,7 @@ export class SupadataService {
 
     this.logger.log(
       `Parsed ${rawSegments.length} raw segments -> merged to ${segments.length} segments, ` +
-      `duration: ${duration.toFixed(1)}s, generated: ${isGenerated}`
+      `duration: ${duration.toFixed(1)}s, generated: ${isGenerated}, llm: ${isGenerated && this.openAIService.isAvailable()}`
     );
 
     return {
