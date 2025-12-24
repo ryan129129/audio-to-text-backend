@@ -41,9 +41,9 @@ export class TranscriptsService {
       const rawKey = `transcripts/${task_id}/raw.json`;
 
       [srtUrl, vttUrl, rawUrl] = await Promise.all([
-        this.r2Service.uploadFile(srtKey, srtContent, 'text/plain'),
-        this.r2Service.uploadFile(vttKey, vttContent, 'text/plain'),
-        this.r2Service.uploadFile(rawKey, JSON.stringify(raw_response), 'application/json'),
+        this.r2Service.uploadFile(srtKey, srtContent, 'text/plain; charset=utf-8'),
+        this.r2Service.uploadFile(vttKey, vttContent, 'text/vtt; charset=utf-8'),
+        this.r2Service.uploadFile(rawKey, JSON.stringify(raw_response), 'application/json; charset=utf-8'),
       ]);
 
       this.logger.log(`Uploaded transcript files for task ${task_id}`);
