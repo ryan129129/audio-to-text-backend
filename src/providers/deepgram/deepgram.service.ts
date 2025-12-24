@@ -2,12 +2,22 @@ import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
 
+/**
+ * Deepgram 转录参数
+ * @see https://developers.deepgram.com/docs/features
+ */
 export interface DeepgramTranscriptionOptions {
+  /** 模型名称，默认 nova-3 */
   model?: string;
+  /** 指定音频语言（BCP-47 格式），如 en, zh, ja */
   language?: string;
+  /** 识别说话人变化，为每个词分配 speaker ID，默认 true */
   diarize?: boolean;
+  /** 自动检测音频语言，返回 detected_language 和 language_confidence，默认 true */
   detect_language?: boolean;
-  utterances?: boolean;  // 是否返回按语义分段的 utterances，默认 false
+  /** 将语音分割成语义单元，返回 utterances 数组（含时间戳、说话人），默认 true */
+  utterances?: boolean;
+  /** 异步模式的回调 URL */
   callback_url?: string;
 }
 
@@ -75,10 +85,10 @@ export class DeepgramService implements OnModuleInit {
   ): Promise<{ request_id: string }> {
     const params = new URLSearchParams({
       model: options.model || 'nova-3',
-      diarize: String(options.diarize ?? true),
-      detect_language: String(options.detect_language ?? true),
-      punctuate: 'true',
-      utterances: String(options.utterances ?? false),  // 默认 false，由前端控制
+      diarize: String(options.diarize ?? true),            // 识别说话人
+      detect_language: String(options.detect_language ?? true),  // 自动检测语言
+      punctuate: 'true',                                   // 添加标点
+      utterances: String(options.utterances ?? true),      // 返回语义分段
     });
 
     if (options.language) {
@@ -89,17 +99,14 @@ export class DeepgramService implements OnModuleInit {
       params.set('callback', options.callback_url);
     }
 
-    const response = await fetch(
-      `${this.baseUrl}/listen?${params.toString()}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Token ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: audioUrl }),
+    const response = await fetch(`${this.baseUrl}/listen?${params.toString()}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${this.apiKey}`,
+        'Content-Type': 'application/json',
       },
-    );
+      body: JSON.stringify({ url: audioUrl }),
+    });
 
     if (!response.ok) {
       const error = await response.text();
@@ -119,27 +126,24 @@ export class DeepgramService implements OnModuleInit {
   ): Promise<DeepgramResult> {
     const params = new URLSearchParams({
       model: options.model || 'nova-3',
-      diarize: String(options.diarize ?? true),
-      detect_language: String(options.detect_language ?? true),
-      punctuate: 'true',
-      utterances: String(options.utterances ?? false),  // 默认 false，由前端控制
+      diarize: String(options.diarize ?? true),            // 识别说话人
+      detect_language: String(options.detect_language ?? true),  // 自动检测语言
+      punctuate: 'true',                                   // 添加标点
+      utterances: String(options.utterances ?? true),      // 返回语义分段
     });
 
     if (options.language) {
       params.set('language', options.language);
     }
 
-    const response = await fetch(
-      `${this.baseUrl}/listen?${params.toString()}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Token ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: audioUrl }),
+    const response = await fetch(`${this.baseUrl}/listen?${params.toString()}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${this.apiKey}`,
+        'Content-Type': 'application/json',
       },
-    );
+      body: JSON.stringify({ url: audioUrl }),
+    });
 
     if (!response.ok) {
       const error = await response.text();
@@ -150,8 +154,8 @@ export class DeepgramService implements OnModuleInit {
 
     this.logger.log(
       `Deepgram response: duration=${result.metadata?.duration}s, ` +
-      `utterances=${result.results?.utterances?.length || 0}, ` +
-      `words=${result.results?.channels?.[0]?.alternatives?.[0]?.words?.length || 0}`
+        `utterances=${result.results?.utterances?.length || 0}, ` +
+        `words=${result.results?.channels?.[0]?.alternatives?.[0]?.words?.length || 0}`,
     );
 
     // duration 在 metadata 中，channels 和 utterances 在 results 中
@@ -167,11 +171,7 @@ export class DeepgramService implements OnModuleInit {
    * Deepgram 使用 HMAC SHA256 签名
    * 签名格式: sha256=<signature>
    */
-  verifyWebhookSignature(
-    payload: string | Buffer,
-    signature: string,
-    secret: string,
-  ): boolean {
+  verifyWebhookSignature(payload: string | Buffer, signature: string, secret: string): boolean {
     if (!signature || !secret) {
       this.logger.warn('Missing signature or secret for webhook verification');
       return false;
@@ -179,9 +179,7 @@ export class DeepgramService implements OnModuleInit {
 
     try {
       // 提取签名值（格式: sha256=xxx 或直接是签名）
-      const providedSig = signature.startsWith('sha256=')
-        ? signature.slice(7)
-        : signature;
+      const providedSig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
 
       // 计算期望的签名
       const hmac = createHmac('sha256', secret);
