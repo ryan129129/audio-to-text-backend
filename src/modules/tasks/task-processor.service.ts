@@ -103,29 +103,32 @@ export class TaskProcessorService {
   ): Promise<TranscriptResult> {
     this.logger.log(`Processing audio with Deepgram: ${audioUrl}`);
 
-    // 调用 Deepgram 进行转录（让 Deepgram 自动检测音频语言）
+    // 调用 Deepgram 进行转录
     const result = await this.deepgramService.transcribeUrlSync(audioUrl, {
       diarize: true,
-      detect_language: true,  // 始终自动检测音频语言
+      detect_language: true,
     });
 
-    // 提取片段（Deepgram utterances 已经是完整句子，无需合并）
-    let segments = this.extractSegments(result);
+    // 提取原始片段
+    const rawSegments = this.extractSegments(result);
     const duration = result.duration;
+    this.logger.log(`Deepgram returned ${rawSegments.length} segments`);
 
-    // 如果指定了目标语言，进行翻译
-    const targetLanguage = params?.language;
-    if (targetLanguage && this.openAIService.isAvailable()) {
-      this.logger.log(`Translating ${segments.length} segments to ${targetLanguage}...`);
-      segments = await this.openAIService.translateSegments(segments, targetLanguage);
-      this.logger.log(`Translation completed`);
+    // 统一交给 OpenAI 合并 + 翻译
+    let segments = rawSegments;
+    if (this.openAIService.isAvailable()) {
+      this.logger.log(`Processing ${rawSegments.length} segments with OpenAI...`);
+      segments = await this.openAIService.mergeTranscriptSegments(rawSegments, {
+        language: params?.language,  // 目标翻译语言（可选）
+      });
+      this.logger.log(`OpenAI returned ${segments.length} segments`);
     }
 
     return {
       segments,
       duration,
       language: params?.language || 'unknown',
-      isGenerated: true,  // Deepgram 总是 AI 生成
+      isGenerated: true,
     };
   }
 
@@ -179,8 +182,9 @@ export class TaskProcessorService {
   }
 
   /**
-   * 从 Deepgram 结果提取片段
-   * 优先使用 utterances（按语义分段），fallback 到 words
+   * 从 Deepgram 结果提取原始片段
+   * 优先使用 utterances，fallback 到 channels.words
+   * 提取后统一交给 OpenAI 进行合并 + 翻译
    */
   private extractSegments(result: any): Array<{
     start: number;
@@ -188,9 +192,8 @@ export class TaskProcessorService {
     text: string;
     speaker: string | null;
   }> {
-    // 优先使用 utterances（Deepgram 按语义分段的结果）
+    // 优先使用 utterances
     if (result.utterances && result.utterances.length > 0) {
-      this.logger.log(`Using ${result.utterances.length} utterances from Deepgram`);
       return result.utterances.map((utterance: any) => ({
         start: utterance.start,
         end: utterance.end,
@@ -199,50 +202,30 @@ export class TaskProcessorService {
       }));
     }
 
-    // Fallback: 从 words 构建 segments（按 speaker + 时间间隔分段）
-    this.logger.log('No utterances, building segments from words');
-    const segments: Array<{
-      start: number;
-      end: number;
-      text: string;
-      speaker: string | null;
-    }> = [];
+    // Fallback: 从 channels.words 提取
+    const words = result.channels?.[0]?.alternatives?.[0]?.words || [];
+    if (words.length === 0) return [];
 
-    const channel = result.channels?.[0];
-    if (!channel) return segments;
-
-    const words = channel.alternatives?.[0]?.words || [];
-    if (words.length === 0) return segments;
-
-    // 按 speaker 变化或时间间隔（超过 1 秒）分段
-    const TIME_GAP_THRESHOLD = 1.0; // 秒
+    // 按说话人分段
+    const segments: Array<{ start: number; end: number; text: string; speaker: string | null }> = [];
     let currentSegment: { start: number; end: number; text: string; speaker: number | null } | null = null;
 
     for (const word of words) {
       const speaker = word.speaker ?? null;
       const wordText = word.punctuated_word || word.word;
 
-      // 判断是否需要开始新 segment
-      const shouldStartNew = !currentSegment ||
-        currentSegment.speaker !== speaker ||
-        (word.start - currentSegment.end) > TIME_GAP_THRESHOLD;
-
-      if (shouldStartNew) {
+      // 说话人变化时断开
+      if (!currentSegment || currentSegment.speaker !== speaker) {
         if (currentSegment) {
           segments.push({
             ...currentSegment,
             speaker: currentSegment.speaker !== null ? `Speaker ${currentSegment.speaker}` : null,
           });
         }
-        currentSegment = {
-          start: word.start,
-          end: word.end,
-          text: wordText,
-          speaker,
-        };
+        currentSegment = { start: word.start, end: word.end, text: wordText, speaker };
       } else {
-        currentSegment!.end = word.end;
-        currentSegment!.text += ' ' + wordText;
+        currentSegment.end = word.end;
+        currentSegment.text += ' ' + wordText;
       }
     }
 
@@ -253,7 +236,6 @@ export class TaskProcessorService {
       });
     }
 
-    this.logger.log(`Built ${segments.length} segments from ${words.length} words`);
     return segments;
   }
 }

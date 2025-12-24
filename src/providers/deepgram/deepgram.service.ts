@@ -7,6 +7,7 @@ export interface DeepgramTranscriptionOptions {
   language?: string;
   diarize?: boolean;
   detect_language?: boolean;
+  utterances?: boolean;  // 是否返回按语义分段的 utterances，默认 false
   callback_url?: string;
 }
 
@@ -73,11 +74,11 @@ export class DeepgramService implements OnModuleInit {
     options: DeepgramTranscriptionOptions = {},
   ): Promise<{ request_id: string }> {
     const params = new URLSearchParams({
-      model: options.model || 'nova-2',
+      model: options.model || 'nova-3',
       diarize: String(options.diarize ?? true),
       detect_language: String(options.detect_language ?? true),
       punctuate: 'true',
-      utterances: 'true',
+      utterances: String(options.utterances ?? false),  // 默认 false，由前端控制
     });
 
     if (options.language) {
@@ -117,11 +118,11 @@ export class DeepgramService implements OnModuleInit {
     options: Omit<DeepgramTranscriptionOptions, 'callback_url'> = {},
   ): Promise<DeepgramResult> {
     const params = new URLSearchParams({
-      model: options.model || 'nova-2',
+      model: options.model || 'nova-3',
       diarize: String(options.diarize ?? true),
       detect_language: String(options.detect_language ?? true),
       punctuate: 'true',
-      utterances: 'true',
+      utterances: String(options.utterances ?? false),  // 默认 false，由前端控制
     });
 
     if (options.language) {
